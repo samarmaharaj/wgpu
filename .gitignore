@@ -1,0 +1,14 @@
+.asv/
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Local Python environments
+.env
+.venv
+env/
+venv/
+
+# Benchmark output
+html/
+results/

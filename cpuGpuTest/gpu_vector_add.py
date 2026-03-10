@@ -5,6 +5,7 @@ import wgpu
 
 
 WORKGROUP_SIZE = 64
+MAX_DISPATCH_X = 65535
 
 SHADER_SOURCE = '''
 @group(0) @binding(0)
@@ -18,7 +19,7 @@ var<storage, read_write> c: array<f32>;
 
 @compute @workgroup_size(64)
 fn main(@builtin(global_invocation_id) id: vec3<u32>) {
-    let i = id.x;
+    let i = id.x + id.y * 65535u * 64u;
     if (i >= arrayLength(&a)) {
         return;
     }
@@ -74,7 +75,10 @@ class GpuVectorAdder:
         compute_pass = command_encoder.begin_compute_pass()
         compute_pass.set_pipeline(self.pipeline)
         compute_pass.set_bind_group(0, bind_group)
-        compute_pass.dispatch_workgroups(ceil(a.size / WORKGROUP_SIZE))
+        total_workgroups = ceil(a.size / WORKGROUP_SIZE)
+        dispatch_x = min(total_workgroups, MAX_DISPATCH_X)
+        dispatch_y = ceil(total_workgroups / MAX_DISPATCH_X)
+        compute_pass.dispatch_workgroups(dispatch_x, dispatch_y, 1)
         compute_pass.end()
         command_encoder.copy_buffer_to_buffer(buf_c, 0, staging, 0, size)
         self.device.queue.submit([command_encoder.finish()])
