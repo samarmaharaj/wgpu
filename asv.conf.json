@@ -1,0 +1,17 @@
+{
+    "version": 1,
+    "project": "wgpu-cpu-vs-gpu",
+    "project_url": "",
+    "repo": ".",
+    "branches": ["HEAD"],
+    "dvcs": "git",
+    "benchmark_dir": "benchmarks",
+    "env_dir": ".asv/env",
+    "results_dir": ".asv/results",
+    "html_dir": ".asv/html",
+    "pythons": ["c:/dev/GSOC2026/.venv/Scripts/python.exe"],
+    "build_command": [],
+    "install_command": [],
+    "uninstall_command": [],
+    "default_benchmark_timeout": 300
+}

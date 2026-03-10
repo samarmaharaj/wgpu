@@ -1,0 +1,9 @@
+{
+    "arch": "x86_64",
+    "cpu": "AMD Ryzen 7 5800HS with Radeon Graphics @3.20GHz (8 cores)",
+    "machine": "osho",
+    "num_cpu": "1",
+    "os": "window 11",
+    "ram": "16GB",
+    "version": 1
+}
