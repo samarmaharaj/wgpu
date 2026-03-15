@@ -124,3 +124,59 @@ Even with full round-trip PCIe overhead, the GPU wins because the per-voxel work
 3. The workload maps to massively parallel independent threads (1 thread = 1 voxel).
 
 These results directly motivate GPU-accelerating DIPY algorithms like DTI fitting, CSD, and tractography using `wgpu-py`.
+
+---
+
+## March 16, 2026 — 4-candidate ASV run (same env, fixed seeds)
+
+Benchmarks run with:
+
+```bash
+conda run -n wgpu asv run --dry-run --show-stderr --python=same --quick \
+	-b "TimeDTI|TimeDTICompute|TimeNLMeans|TimeNLMeansCompute|TimeVecValVect|TimeVecValVectCompute|TimeSetNumberOfPoints|TimeSetNumberOfPointsCompute"
+```
+
+### Candidate summary (largest successful size)
+
+| Candidate | Full round-trip (CPU vs GPU) | Pre-loaded (CPU vs GPU) | Approx speedup (GPU/CPU) |
+|---|---|---|---|
+| DTI OLS (`500,000` voxels) | `109 ms` vs `331 ms` | `119 ms` vs `245 ms` | `0.33×` full, `0.49×` preloaded |
+| NLM (`32^3`) | `1.27 min` vs `547 ms` | `1.27 min` vs `523 ms` | `~139×` full, `~145×` preloaded |
+| vec_val_vect (`1,000,000` tensors) | `174 ms` vs `291 ms` | `173 ms` vs `235 ms` | `0.60×` full, `0.74×` preloaded |
+| set_number_of_points (`100,000` streamlines) | `31.1 s` vs `375 ms` | `28.5 s` vs `239 ms` | `~83×` full, `~119×` preloaded |
+
+### Correctness checks (fixed RNG seed)
+
+- DTI: `allclose=True`, max abs diff `2.09e-07` (`atol=2e-4`)
+- NLM: `allclose=True`, max abs diff `8.39e-05` (`atol=1e-3`)
+- vec_val_vect: `allclose=True`, max abs diff `3.81e-06` (`atol=1e-4`)
+- set_number_of_points: `allclose=True`, max abs diff `3.81e-06` (`atol=1e-3`)
+
+### Ranking for this hardware/config
+
+1. **NLM** — strongest speedup and stable correctness.
+2. **set_number_of_points** — very large speedup, low numerical error.
+3. **vec_val_vect** — GPU slower than CPU; low implementation risk but weak benefit.
+4. **DTI OLS (current prototype)** — GPU slower and fails at `1,000,000` due per-buffer size limit (`268,435,456` bytes on this backend).
+
+## Experiment 4 — NLM Denoising (`bench_nlmeans_gpu.py`)
+
+Benchmarked using ASV (same tool used by DIPY officially).
+
+### Full round-trip (upload + compute + readback)
+| Volume | CPU | GPU | Speedup |
+|--------|-----|-----|---------|
+| 16³ | 9.26 s | 552 ms | 16.8× |
+| 24³ | 30.4 s | 547 ms | 55.6× |
+| 32³ | 76.0 s | 532 ms | **142×** |
+
+### Pre-loaded (compute + readback only)
+| Volume | CPU | GPU | Speedup |
+|--------|-----|-----|---------|
+| 16³ | 9.47 s | 582 ms | 16.3× |
+| 24³ | 30.9 s | 496 ms | 62.3× |
+| 32³ | 76.2 s | 496 ms | **154×** |
+
+**Key insight:** GPU time stays flat at ~500ms regardless of volume 
+size — all voxels compute simultaneously. CPU scales as O(N³).
+Correctness verified: np.allclose(atol=1e-3) passes for all sizes.
