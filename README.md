@@ -129,6 +129,40 @@ These results directly motivate GPU-accelerating DIPY algorithms like DTI fittin
 
 ## March 16, 2026 — 4-candidate ASV run (same env, fixed seeds)
 
+## Experiment 4 — NLM Denoising (`bench_nlmeans_gpu.py`)
+
+Benchmarked using ASV (same tool used by DIPY officially).
+
+```bash
+cd C:\dev\GSOC2026\WGPU\wgpu
+asv run --dry-run --show-stderr --python=same --quick -b TimeNLMeans
+```
+Benchmarks run with:
+
+```bash
+asv run --dry-run --show-stderr --python=same --quick -b TimeNLMeansCompute
+```
+
+### Full round-trip (upload + compute + readback)
+| Volume | CPU | GPU | Speedup |
+|--------|-----|-----|---------|
+| 16³ | 9.26 s | 552 ms | 16.8× |
+| 24³ | 30.4 s | 547 ms | 55.6× |
+| 32³ | 76.0 s | 532 ms | **142×** |
+
+### Pre-loaded (compute + readback only)
+| Volume | CPU | GPU | Speedup |
+|--------|-----|-----|---------|
+| 16³ | 9.47 s | 582 ms | 16.3× |
+| 24³ | 30.9 s | 496 ms | 62.3× |
+| 32³ | 76.2 s | 496 ms | **154×** |
+
+**Key insight:** GPU time stays flat at ~500ms regardless of volume 
+size — all voxels compute simultaneously. CPU scales as O(N³).
+Correctness verified: np.allclose(atol=1e-3) passes for all sizes.
+
+---
+
 Benchmarks run with:
 
 ```bash
@@ -158,25 +192,3 @@ conda run -n wgpu asv run --dry-run --show-stderr --python=same --quick \
 2. **set_number_of_points** — very large speedup, low numerical error.
 3. **vec_val_vect** — GPU slower than CPU; low implementation risk but weak benefit.
 4. **DTI OLS (current prototype)** — GPU slower and fails at `1,000,000` due per-buffer size limit (`268,435,456` bytes on this backend).
-
-## Experiment 4 — NLM Denoising (`bench_nlmeans_gpu.py`)
-
-Benchmarked using ASV (same tool used by DIPY officially).
-
-### Full round-trip (upload + compute + readback)
-| Volume | CPU | GPU | Speedup |
-|--------|-----|-----|---------|
-| 16³ | 9.26 s | 552 ms | 16.8× |
-| 24³ | 30.4 s | 547 ms | 55.6× |
-| 32³ | 76.0 s | 532 ms | **142×** |
-
-### Pre-loaded (compute + readback only)
-| Volume | CPU | GPU | Speedup |
-|--------|-----|-----|---------|
-| 16³ | 9.47 s | 582 ms | 16.3× |
-| 24³ | 30.9 s | 496 ms | 62.3× |
-| 32³ | 76.2 s | 496 ms | **154×** |
-
-**Key insight:** GPU time stays flat at ~500ms regardless of volume 
-size — all voxels compute simultaneously. CPU scales as O(N³).
-Correctness verified: np.allclose(atol=1e-3) passes for all sizes.
