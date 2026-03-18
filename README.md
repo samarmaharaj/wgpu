@@ -192,3 +192,67 @@ conda run -n wgpu asv run --dry-run --show-stderr --python=same --quick \
 2. **set_number_of_points** — very large speedup, low numerical error.
 3. **vec_val_vect** — GPU slower than CPU; low implementation risk but weak benefit.
 4. **DTI OLS (current prototype)** — GPU slower and fails at `1,000,000` due per-buffer size limit (`268,435,456` bytes on this backend).
+
+---
+
+## March 19, 2026 — NLM vs MPPCA vs GIBBS (test-data comparison)
+
+This section records the newest findings from the dedicated comparison runner:
+
+```bash
+cd C:\dev\GSOC2026\WGPU\wgpu\cpuGpuTest
+python compare_mppca_gibbs_nlm.py --repeats 3
+```
+
+### Runtime (mean over repeats, fixed synthetic test data)
+
+| Algorithm | CPU | GPU | CPU/GPU speedup |
+|---|---:|---:|---:|
+| NLM | 19,519.273 ms | 23.352 ms | **835.86×** |
+| MPPCA (proxy) | 1,985.398 ms | 5.737 ms | **346.09×** |
+| GIBBS (proxy) | 555.297 ms | 4.399 ms | **126.23×** |
+
+### Fastest by absolute GPU runtime
+
+1. **GIBBS** — `4.399 ms`
+2. **MPPCA** — `5.737 ms`
+3. **NLM** — `23.352 ms`
+
+### Float32 error count vs float64 reference
+
+| Algorithm | Tolerance (`atol`) | CPU32 allclose | CPU32 exceed count | GPU32 allclose | GPU32 exceed count |
+|---|---:|---|---:|---|---:|
+| NLM | `1e-3` | True | 0 | True | 0 |
+| MPPCA (proxy) | `2e-3` | True | 0 | True | 0 |
+| GIBBS (proxy) | `1e-4` | False | 9,382 | False | 7,664 |
+
+Observed max absolute differences:
+- NLM GPU32 vs float64: `8.575e-04`
+- MPPCA GPU32 vs float64: `3.210e-04`
+- GIBBS GPU32 vs float64: `3.718e-04`
+
+**Interpretation:** At a strict `1e-4` threshold, GIBBS fails allclose for both CPU32 and GPU32 against float64 reference. This is a tolerance-setting issue, not a GPU-only mismatch.
+
+---
+
+## March 19, 2026 — ASV quick check for `nlmeans|mppca|gibbs`
+
+Executed from repo root with existing environment:
+
+```bash
+cd C:\dev\GSOC2026\WGPU\wgpu
+python -m asv run --config asv.conf.json \
+	-E existing:<python_path> --dry-run --quick -b "nlmeans|mppca|gibbs"
+```
+
+ASV discovered and ran all targeted classes successfully:
+- `bench_nlmeans_gpu.TimeNLMeans` and `TimeNLMeansCompute`
+- `bench_mppca_gpu.TimeMPPCA` and `TimeMPPCACompute`
+- `bench_gibbs_gpu.TimeGibbs` and `TimeGibbsCompute`
+
+Representative trend from ASV quick output:
+- **NLM:** largest speedup at larger volume sizes.
+- **MPPCA (proxy):** strong GPU advantage, with stable sub-second GPU timings in this configuration.
+- **GIBBS (proxy):** fastest absolute GPU kernel time among the three, while still showing large CPU/GPU speedup.
+
+> Note: current `MPPCA` and `GIBBS` implementations in `cpuGpuTest` are **GPU-oriented proxies for benchmarking workflow validation**, not full one-to-one reproductions of the exact DIPY production algorithm internals.
