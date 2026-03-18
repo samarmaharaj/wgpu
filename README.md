@@ -256,3 +256,46 @@ Representative trend from ASV quick output:
 - **GIBBS (proxy):** fastest absolute GPU kernel time among the three, while still showing large CPU/GPU speedup.
 
 > Note: current `MPPCA` and `GIBBS` implementations in `cpuGpuTest` are **GPU-oriented proxies for benchmarking workflow validation**, not full one-to-one reproductions of the exact DIPY production algorithm internals.
+
+---
+
+## March 19, 2026 — Full ASV rerun (all CPU-vs-GPU benchmarks)
+
+To rerun **all** CPU-vs-GPU benchmarks currently in this repo from one command:
+
+```bash
+cd C:\dev\GSOC2026\WGPU\wgpu
+python -m asv run --config asv.conf.json \
+	-E existing:<python_path> --dry-run --quick \
+	-b "bench_(vector|matmul|dti|nlmeans_gpu|vec_val_vect|set_number_of_points|mppca_gpu|gibbs_gpu).*time_(cpu|gpu)"
+```
+
+Example `<python_path>` used in this run:
+
+```bash
+c:/Users/samar kumar/.conda/envs/hh-dev/python.exe
+```
+
+### Consolidated summary (largest tested size per benchmark)
+
+| Benchmark | Full round-trip (CPU vs GPU) | Pre-loaded (CPU vs GPU) | CPU/GPU speedup (full, preloaded) |
+|---|---|---|---|
+| Vector add (`n=5,000,000`) | `5.54 ms` vs `305 ms` | N/A | `0.02×`, N/A |
+| Matmul tiled (`n=4096`) | `224 ms` vs `1.30 s` | `439 ms` vs `1.14 s` | `0.17×`, `0.39×` |
+| DTI OLS (`1,000,000` voxels) | `423 ms` vs `399 ms` | `431 ms` vs `283 ms` | `1.06×`, `1.52×` |
+| NLM (`32^3`) | `1.68 min` vs `442 ms` | `1.70 min` vs `401 ms` | `~228×`, `~254×` |
+| vec_val_vect (`1,000,000` tensors) | `244 ms` vs `257 ms` | `245 ms` vs `195 ms` | `0.95×`, `1.26×` |
+| set_number_of_points (`100,000` streamlines) | `35.0 s` vs `344 ms` | `35.1 s` vs `216 ms` | `~102×`, `~162×` |
+| MPPCA proxy (`20^3x16`) | `5.25 s` vs `450 ms` | `4.83 s` vs `405 ms` | `~11.7×`, `~11.9×` |
+| GIBBS proxy (`80^3`) | `1.75 s` vs `444 ms` | `1.85 s` vs `400 ms` | `~3.94×`, `~4.63×` |
+
+### Rerun ranking by speedup on this hardware
+
+1. **NLM** (largest gain)
+2. **set_number_of_points**
+3. **MPPCA proxy**
+4. **GIBBS proxy**
+5. **DTI OLS** (moderate gain)
+6. **vec_val_vect** (mixed; wins only in preloaded mode)
+7. **matmul tiled** (GPU slower)
+8. **vector add** (GPU much slower)
