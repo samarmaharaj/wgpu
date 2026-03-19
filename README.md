@@ -261,10 +261,18 @@ Representative trend from ASV quick output:
 
 ## March 19, 2026 — Full ASV rerun (all CPU-vs-GPU benchmarks)
 
-To rerun **all** CPU-vs-GPU benchmarks currently in this repo from one command:
+To rerun **all** CPU-vs-GPU benchmarks currently in this repo from one command (stable mode, no `--quick`):
 
 ```bash
 cd C:\dev\GSOC2026\WGPU\wgpu
+python -m asv run --config asv.conf.json \
+	-E existing:<python_path> --dry-run \
+	-b "bench_(vector|matmul|dti|nlmeans_gpu|vec_val_vect|set_number_of_points|mppca_gpu|gibbs_gpu).*time_(cpu|gpu)"
+```
+
+Fast smoke-test variant (less stable, but quicker):
+
+```bash
 python -m asv run --config asv.conf.json \
 	-E existing:<python_path> --dry-run --quick \
 	-b "bench_(vector|matmul|dti|nlmeans_gpu|vec_val_vect|set_number_of_points|mppca_gpu|gibbs_gpu).*time_(cpu|gpu)"
@@ -286,16 +294,40 @@ c:/Users/samar kumar/.conda/envs/hh-dev/python.exe
 | NLM (`32^3`) | `1.68 min` vs `442 ms` | `1.70 min` vs `401 ms` | `~228×`, `~254×` |
 | vec_val_vect (`1,000,000` tensors) | `244 ms` vs `257 ms` | `245 ms` vs `195 ms` | `0.95×`, `1.26×` |
 | set_number_of_points (`100,000` streamlines) | `35.0 s` vs `344 ms` | `35.1 s` vs `216 ms` | `~102×`, `~162×` |
-| MPPCA proxy (`20^3x16`) | `5.25 s` vs `450 ms` | `4.83 s` vs `405 ms` | `~11.7×`, `~11.9×` |
-| GIBBS proxy (`80^3`) | `1.75 s` vs `444 ms` | `1.85 s` vs `400 ms` | `~3.94×`, `~4.63×` |
+| MPPCA proxy (`20^3x16`) | `4.17 s` vs `9.07 ms` | `4.15 s` vs `7.77 ms` | `~460×`, `~534×` |
+| GIBBS proxy (`80^3`) | `1.70 s` vs `8.93 ms` | `1.69 s` vs `7.20 ms` | `~190×`, `~235×` |
 
 ### Rerun ranking by speedup on this hardware
 
-1. **NLM** (largest gain)
-2. **set_number_of_points**
-3. **MPPCA proxy**
-4. **GIBBS proxy**
+1. **MPPCA proxy** (after pipeline caching)
+2. **NLM**
+3. **GIBBS proxy** (after pipeline caching)
+4. **set_number_of_points**
 5. **DTI OLS** (moderate gain)
 6. **vec_val_vect** (mixed; wins only in preloaded mode)
 7. **matmul tiled** (GPU slower)
 8. **vector add** (GPU much slower)
+
+> Note: after GPU pipeline/shader caching was added for `MPPCA` and `GIBBS`, non-quick ASV reflects their expected high speedups again. If you see unexpectedly low speedups in quick mode, verify with the stable non-quick command above.
+
+---
+
+## March 19, 2026 — Post-fix validation for `MPPCA` and `GIBBS`
+
+After caching shader/pipeline setup in GPU dispatch paths (`gpu_mppca.py`, `gpu_gibbs.py`), we re-ran ASV in non-quick mode:
+
+```bash
+cd C:\dev\GSOC2026\WGPU\wgpu
+python -m asv run --config asv.conf.json \
+	-E existing:<python_path> --dry-run \
+	-b "bench_(mppca_gpu|gibbs_gpu).*time_(cpu|gpu)"
+```
+
+Largest-size results from this run:
+
+| Benchmark | Full round-trip (CPU vs GPU) | Pre-loaded (CPU vs GPU) | CPU/GPU speedup (full, preloaded) |
+|---|---|---|---|
+| MPPCA proxy (`20^3x16`) | `4.17 s` vs `9.07 ms` | `4.15 s` vs `7.77 ms` | `~460×`, `~534×` |
+| GIBBS proxy (`80^3`) | `1.70 s` vs `8.93 ms` | `1.69 s` vs `7.20 ms` | `~190×`, `~235×` |
+
+This explains the discrepancy with earlier low (~4–12×) ASV quick numbers: those were dominated by per-call compile/setup overhead before pipeline caching.
