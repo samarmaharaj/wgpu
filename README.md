@@ -278,11 +278,11 @@ python -m asv run --config asv.conf.json \
 	-b "bench_(vector|matmul|dti|nlmeans_gpu|vec_val_vect|set_number_of_points|mppca_gpu|gibbs_gpu).*time_(cpu|gpu)"
 ```
 
-Example `<python_path>` used in this run:
+<!-- Example `<python_path>` used in this run:
 
 ```bash
 c:/Users/samar kumar/.conda/envs/hh-dev/python.exe
-```
+``` -->
 
 ### Consolidated summary (largest tested size per benchmark)
 
