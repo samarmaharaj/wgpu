@@ -80,6 +80,44 @@ class GpuGibbsSuppress:
             adapter = wgpu.gpu.request_adapter_sync(power_preference="high-performance")
             device = adapter.request_device_sync()
         self.device = device
+        self._shader = self.device.create_shader_module(code=WGSL_GIBBS)
+        self._bgl = self.device.create_bind_group_layout(
+            entries=[
+                {
+                    "binding": 0,
+                    "visibility": wgpu.ShaderStage.COMPUTE,
+                    "buffer": {"type": wgpu.BufferBindingType.read_only_storage},
+                },
+                {
+                    "binding": 1,
+                    "visibility": wgpu.ShaderStage.COMPUTE,
+                    "buffer": {"type": wgpu.BufferBindingType.storage},
+                },
+            ]
+        )
+        self._layout = self.device.create_pipeline_layout(bind_group_layouts=[self._bgl])
+        self._pipelines = {}
+
+    def _get_pipeline(self, x, y, z, alpha, eps):
+        key = (int(x), int(y), int(z), float(alpha), float(eps))
+        pipeline = self._pipelines.get(key)
+        if pipeline is None:
+            pipeline = self.device.create_compute_pipeline(
+                layout=self._layout,
+                compute={
+                    "module": self._shader,
+                    "entry_point": "main",
+                    "constants": {
+                        "X": x,
+                        "Y": y,
+                        "Z": z,
+                        "ALPHA": float(alpha),
+                        "EPS": float(eps),
+                    },
+                },
+            )
+            self._pipelines[key] = pipeline
+        return pipeline
 
     def preload(self, data):
         data = np.ascontiguousarray(data, dtype=np.float32)
@@ -99,40 +137,10 @@ class GpuGibbsSuppress:
             size=out_n * 4,
             usage=wgpu.BufferUsage.STORAGE | wgpu.BufferUsage.COPY_SRC,
         )
-
-        shader = self.device.create_shader_module(code=WGSL_GIBBS)
-        bgl = self.device.create_bind_group_layout(
-            entries=[
-                {
-                    "binding": 0,
-                    "visibility": wgpu.ShaderStage.COMPUTE,
-                    "buffer": {"type": wgpu.BufferBindingType.read_only_storage},
-                },
-                {
-                    "binding": 1,
-                    "visibility": wgpu.ShaderStage.COMPUTE,
-                    "buffer": {"type": wgpu.BufferBindingType.storage},
-                },
-            ]
-        )
-
-        pipeline = self.device.create_compute_pipeline(
-            layout=self.device.create_pipeline_layout(bind_group_layouts=[bgl]),
-            compute={
-                "module": shader,
-                "entry_point": "main",
-                "constants": {
-                    "X": x,
-                    "Y": y,
-                    "Z": z,
-                    "ALPHA": float(alpha),
-                    "EPS": float(eps),
-                },
-            },
-        )
+        pipeline = self._get_pipeline(x, y, z, alpha, eps)
 
         bind_group = self.device.create_bind_group(
-            layout=bgl,
+            layout=self._bgl,
             entries=[
                 {"binding": 0, "resource": {"buffer": buf_vol}},
                 {"binding": 1, "resource": {"buffer": buf_out}},
