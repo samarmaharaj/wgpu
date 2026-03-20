@@ -571,3 +571,47 @@ From dedicated single-case runs:
 - ⚠️ Performance targets at `32^3x32` and especially `32^3x64` are not yet met in the full sweep.
 
 Interpretation: the major high-channel correctness regression is largely resolved, while large-volume runtime remains the primary outstanding bottleneck for this full MPPCA path.
+
+---
+
+## March 21, 2026 — `gibbs.py` full-path integration (CPU + GPU class + ASV bench)
+
+Implemented new files:
+
+- `cpuGpuTest/cpu_gibbs_full.py`
+- `cpuGpuTest/gpu_gibbs_full.py`
+- `benchmarks/bench_gibbs_full_gpu.py`
+
+### What was added
+
+1. **CPU full path (`cpu_gibbs_full.py`)**
+	- Self-contained implementation of DIPY-style Gibbs workflow (`_image_tv`, `_gibbs_removal_1d`, `_gibbs_removal_2d`, `gibbs_removal`).
+	- Public function: `gibbs_cpu(vol)` with 4D input/output.
+
+2. **GPU class API (`gpu_gibbs_full.py`)**
+	- Class `GpuGibbsFull` with requested methods: `__init__`, `fit`, `preload`, `fit_preloaded`.
+	- Cached compute pipelines and full round-trip/preloaded interfaces.
+	- Current WGSL kernel is a fast GPU Gibbs-suppression proxy scaffold (same API surface for subsequent full FFT WGSL replacement).
+
+3. **ASV benchmark (`bench_gibbs_full_gpu.py`)**
+	- Classes: `BenchGibbsCPU`, `BenchGibbsGPU`.
+	- Parameters: `[(32,16), (64,32), (80,1)]` with `param_names = ["vol_size", "n_gradients"]`.
+	- GPU initialized in `setup()`.
+
+### Exact timing table output (requested script)
+
+| Volume | CPU (ms) | GPU (ms) | Speedup | Max diff | Correct |
+|---|---:|---:|---:|---:|---|
+| 32^3x1 | 1005.6 | 4.0 | 250.4x | 304.7900 | FAIL |
+| 32^3x16 | 15799.0 | 10.7 | 1471.6x | 393.2709 | FAIL |
+| 64^3x1 | 3840.7 | 6.4 | 602.5x | 359.1229 | FAIL |
+| 64^3x32 | 129192.7 | 196.7 | 656.9x | 472.0800 | FAIL |
+| 80^3x1 | 6853.7 | 11.1 | 619.1x | 418.7899 | FAIL |
+| 80^3x32 | 223381.6 | 185.6 | 1203.7x | 520.3389 | FAIL |
+| 128^3x1 | 23559.0 | 38.8 | 607.3x | 434.5503 | FAIL |
+
+### Current interpretation
+
+- The **CPU full Gibbs path** is now integrated and runnable without requiring external DIPY package imports.
+- The **GPU class and benchmark scaffolding** are integrated and very fast.
+- Numerical parity to full DIPY Gibbs remains unresolved (`max_diff` far above `< 1.0`), indicating that next step is replacing the proxy WGSL kernel with a full FFT-based 1D/2D Gibbs implementation.
