@@ -233,6 +233,22 @@ Observed max absolute differences:
 
 **Interpretation:** At a strict `1e-4` threshold, GIBBS fails allclose for both CPU32 and GPU32 against float64 reference. This is a tolerance-setting issue, not a GPU-only mismatch.
 
+### Important clarification on `MPPCA proxy`
+
+The current `MPPCA proxy` in `cpuGpuTest/gpu_mppca.py` is **not** a full DIPY MPPCA implementation.
+
+What it does implement:
+- patch-wise channel means
+- patch-wise channel variances
+- shrinkage update using a shared noise proxy (`sigma2`) and per-channel variance
+
+What it does **not** implement:
+- covariance matrix construction for each patch as done in true local PCA/MPPCA
+- eigendecomposition / SVD step (no `eigh()`-equivalent GPU solver)
+- eigenvalue thresholding in PCA space followed by reconstruction
+
+So the current speedups validate the GPU pipeline and memory pattern, but they are **not** evidence of a completed GPU eigensolver-based MPPCA.
+
 ---
 
 ## March 19, 2026 — ASV quick check for `nlmeans|mppca|gibbs`
@@ -331,3 +347,227 @@ Largest-size results from this run:
 | GIBBS proxy (`80^3`) | `1.70 s` vs `8.93 ms` | `1.69 s` vs `7.20 ms` | `~190×`, `~235×` |
 
 This explains the discrepancy with earlier low (~4–12×) ASV quick numbers: those were dominated by per-call compile/setup overhead before pipeline caching.
+
+---
+
+## March 19, 2026 — Hybrid MPPCA (`GPU matmuls + CPU eigh`) and ASV comparison
+
+Implemented a new hybrid path in:
+- `cpuGpuTest/cpu_mppca_hybrid.py`
+- `cpuGpuTest/gpu_mppca_hybrid.py`
+- `benchmarks/bench_mppca_hybrid_gpu.py`
+
+### Hybrid architecture (matches requested split)
+
+- **GPU:** patch extraction + means + covariance (`XᵀX / n`) for all voxels in parallel
+- **CPU:** `eigh()` per voxel on precomputed covariance matrices
+- **GPU:** reconstruction using projector (`X·W·Wᵀ + M`) and overlap averaging output
+
+So this version includes the **real eigendecomposition step on CPU** while offloading matrix-heavy stages to GPU.
+
+### ASV run command (head-to-head)
+
+```bash
+cd C:\dev\GSOC2026\WGPU\wgpu
+python -m asv run --config asv.conf.json \
+	-E existing:<python_path> --dry-run --quick \
+	-b "bench_(nlmeans_gpu|mppca_gpu|gibbs_gpu|mppca_hybrid_gpu).*time_(cpu|gpu)"
+```
+
+### Largest-size comparison (from this run)
+
+| Candidate | Full round-trip (CPU vs GPU) | Pre-loaded (CPU vs GPU) | CPU/GPU speedup (full, preloaded) |
+|---|---|---|---|
+| NLM (`32^3`) | `1.37 min` vs `464 ms` | `1.37 min` vs `415 ms` | `~177×`, `~198×` |
+| MPPCA proxy (`20^3x16`) | `3.96 s` vs `306 ms` | `3.92 s` vs `260 ms` | `~12.9×`, `~15.1×` |
+| GIBBS proxy (`80^3`) | `1.62 s` vs `331 ms` | `1.65 s` vs `262 ms` | `~4.9×`, `~6.3×` |
+| **MPPCA hybrid** (`12^3x12`) | `361 ms` vs `415 ms` | `354 ms` vs `356 ms` | `0.87×`, `0.99×` |
+
+### Interpretation
+
+- `NLM` remains the strongest accelerator target in this benchmark set.
+- `MPPCA proxy` and `GIBBS proxy` still show clear GPU advantage in quick ASV mode.
+- The new `MPPCA hybrid` is currently ~break-even/slightly slower on GPU at tested sizes because CPU `eigh()` plus host/device movement is still dominant.
+- This hybrid result is still useful: it validates the staged architecture and isolates the remaining bottleneck to the eigensolver side and transfer orchestration.
+
+---
+
+## Strategy for real GPU MPPCA (proposal-facing)
+
+Given the clarification above, the real project should treat eigendecomposition as a primary deliverable.
+
+### Phase plan
+
+1. **Keep existing proxy path** as performance baseline and integration scaffold.
+2. **Implement true patch covariance builder** on GPU.
+3. **Add small-matrix batched eigensolver** (or batched SVD) for per-voxel patch covariance.
+4. **Apply MPPCA eigenvalue selection/thresholding** and reconstruct denoised signals.
+5. **Validate numerics against DIPY reference** (`localpca.mppca`) with fixed seeds and tolerance sweeps.
+6. **Benchmark with ASV** in both full round-trip and pre-loaded modes.
+
+### Risk and mitigation
+
+- **Hard part:** robust GPU eigensolver for many small matrices.
+- **Mitigation:** stage delivery into (a) covariance kernel, (b) solver kernel, (c) reconstruction kernel, each benchmarked and validated independently.
+
+This keeps the proposal honest: current proxy demonstrates strong acceleration potential, while full GPU MPPCA requires delivering a GPU eigen/SVD path.
+
+---
+
+## March 19, 2026 — Proposal decision: Hybrid vs Pure-GPU MPPCA
+
+### What the current evidence says
+
+- `MPPCA proxy` can show large speedups, but it is **not** full DIPY MPPCA.
+- `MPPCA hybrid` is algorithmically closer to real MPPCA (includes CPU `eigh()`), but is currently near break-even because eigensolver + transfer orchestration dominates.
+- The bottleneck is now clearly identified: **per-voxel eigendecomposition path and host/device data movement**.
+
+### Decision matrix (for proposal framing)
+
+| Option | Algorithm fidelity | Expected acceleration | Implementation risk | Proposal role |
+|---|---|---|---|---|
+| **Hybrid MPPCA** (GPU covariance/recon + CPU `eigh`) | High (true eigendecomposition used) | Low-to-moderate unless transfer/eigh overhead is reduced | **Low–Medium** | **Primary committed deliverable** |
+| **Pure GPU MPPCA** (GPU eigensolver included) | Highest | Highest long-term potential (target path to 25×) | **High** | **Stretch/advanced milestone** |
+
+### Can we target 25× for MPPCA?
+
+Yes, but realistically only if MPPCA becomes near-fully GPU resident:
+
+1. Upload once (full volume), keep intermediates on GPU.
+2. GPU patch extraction + covariance for all voxels.
+3. GPU batched small-matrix eigensolver/SVD (or equivalent iterative solver).
+4. GPU thresholding + reconstruction + accumulation.
+5. Single final readback.
+
+If `eigh()` remains CPU-side, 25× is unlikely for full pipeline timing.
+
+### Recommended mentor pitch
+
+- **Honest baseline:** Hybrid shows where true bottleneck is.
+- **Confident delivery:** Hybrid path is mergeable and lower risk in fixed timeline.
+- **High-impact roadmap:** Pure GPU eigensolver is the unlock for 25× and is included as stretch milestone.
+- **Already validated accelerator value:** NLM and other kernels demonstrate strong GPU gains in this stack.
+
+### Success criteria to state in proposal
+
+- **Minimum success:** accurate hybrid MPPCA integrated + benchmarked + validated against DIPY reference.
+- **Target success:** >1× end-to-end speedup hybrid on representative volumes.
+- **Stretch success:** pure GPU eigensolver path with preloaded-mode speedup approaching or exceeding **25×**.
+
+---
+
+## March 19, 2026 — Decision test: Hybrid MPPCA at `32^3` with `64` gradients
+
+This was run as a targeted hybrid stress test with shape `(32, 32, 32, 64)` and `patch_radius=1`, using the same fixed-seed synthetic data style as prior sections.
+
+### Important runtime fix required before this test
+
+At this size, the covariance pass exceeded WebGPU dispatch limits in `gpu_mppca_hybrid.py` (single-dispatch `x` dimension > `65535`).
+To enable this run, the hybrid GPU path was updated to use **chunked 1D dispatch with offset uniforms** for mean/cov/reconstruction passes.
+
+### Measured timings (2-repeat confirmation)
+
+| Case | Mean time |
+|---|---:|
+| CPU hybrid (`mppca_hybrid_cpu`) | `19.610 s` |
+| GPU hybrid full round-trip (`fit`) | `9.616 s` |
+| GPU hybrid pre-loaded (`fit_preloaded`) | `9.783 s` |
+
+Computed speedups:
+- **Full round-trip:** `19.610 / 9.616 = 2.04×`
+- **Pre-loaded:** `19.610 / 9.783 = 2.00×`
+
+### Decision from this test
+
+- This is **not** the `20×+` outcome required to make hybrid MPPCA a high-speedup headline.
+- It is also **not** a failure: it confirms hybrid can move above break-even at larger workload, but currently only to ~`2×` in this implementation.
+- Under the stated threshold logic: since this `32^3 x 64` decision test is still below `10×`, the honest proposal emphasis remains **NLM + Gibbs** for strong acceleration claims, with hybrid MPPCA positioned as a fidelity-oriented milestone.
+
+### Numerical note
+
+In this test configuration, CPU-vs-GPU hybrid output divergence was non-trivial (observed max abs diff around `9.34e+02` in a direct check), so algorithmic parity validation should be completed before using hybrid quality claims in proposal text.
+
+---
+
+## March 19, 2026 — Follow-up scaling check: Hybrid MPPCA at `64^3` with `32` gradients
+
+To map the scaling trend with a larger spatial workload (while keeping runtime practical), we ran a one-repeat feasibility check at shape `(64, 64, 64, 32)` with `patch_radius=1`.
+
+### Measured timings
+
+| Case | Mean time |
+|---|---:|
+| CPU hybrid (`mppca_hybrid_cpu`) | `69.683 s` |
+| GPU hybrid full round-trip (`fit`) | `12.406 s` |
+| GPU hybrid pre-loaded (`fit_preloaded`) | `11.815 s` |
+
+Computed speedups:
+- **Full round-trip:** `69.683 / 12.406 = 5.62×`
+- **Pre-loaded:** `69.683 / 11.815 = 5.90×`
+
+### Scaling interpretation
+
+- This confirms the expected direction: hybrid speedup increases with larger volume size (from ~`2×` at `32^3x64` to ~`5.6–5.9×` at `64^3x32`).
+- Even with this improvement, it is still below the `10×` cutoff and far below `20×+`.
+- Proposal framing remains: **NLM + Gibbs** for headline acceleration claims, with hybrid MPPCA as a fidelity/architecture milestone and pure-GPU eigensolver as the stretch path.
+
+### Numerical note
+
+Direct CPU-vs-GPU hybrid output divergence remained high in this test as well (max abs diff around `9.18e+02`), reinforcing that parity validation is still required before using hybrid denoising-quality claims.
+
+---
+
+## March 20, 2026 — Full GPU MPPCA (`gpu_mppca_full.py`) bug-fix findings
+
+This section records the latest targeted debug pass for the full 4-stage GPU MPPCA path in:
+
+- `cpuGpuTest/gpu_mppca_full.py`
+
+### Scope of fixes applied
+
+Two issues were addressed in the current implementation cycle:
+
+1. **High-channel correctness mismatch (`32+` channels):**
+	 - Updated Stage C MP classifier logic to mirror CPU truncation behavior when `dim > num_samples - 1`.
+	 - This aligned component counting in large-channel cases and removed the ~200 max-diff failures for `16^3x32`, `20^3x32`, and `24^3x32`.
+
+2. **Chunked dispatch verification for large volumes:**
+	 - Added chunk-dispatch debug print in `_dispatch_chunked()`:
+		 - `print(f"n_voxels={n_voxels}, chunk_size={chunk_size}, n_chunks={n_chunks}")`
+	 - Observed for `32^3x64`:
+		 - `n_voxels=32768, chunk_size=65535, n_chunks=1`
+	 - This confirms the current code is **not** iterating once per voxel in chunk dispatch.
+
+Additional runtime cleanup:
+- Removed large host-side zero-array uploads in `fit_preloaded()` and switched to direct GPU buffer allocation for intermediates.
+
+### Exact timing table output (post-fix run, `patch_radius=1`)
+
+| Volume | CPU (ms) | GPU (ms) | Speedup | Max diff | Correct |
+|---|---:|---:|---:|---:|---|
+| 8^3x8 | 96.7 | 20.1 | 4.8x | 0.0002 | PASS |
+| 8^3x16 | 125.3 | 68.4 | 1.8x | 0.0005 | PASS |
+| 12^3x8 | 322.2 | 14.3 | 22.5x | 0.0003 | PASS |
+| 12^3x16 | 400.5 | 66.1 | 6.1x | 0.5923 | PASS |
+| 16^3x16 | 1023.7 | 85.4 | 12.0x | 0.9339 | PASS |
+| 16^3x32 | 1385.1 | 570.6 | 2.4x | 4.0719 | PASS |
+| 20^3x32 | 2457.2 | 967.9 | 2.5x | 4.8794 | PASS |
+| 24^3x32 | 4264.0 | 1667.9 | 2.6x | 3.7749 | PASS |
+| 32^3x32 | 9356.1 | 233498.4 | 0.0x | 5.3694 | FAIL |
+| 32^3x64 | 18843.8 | 238484.8 | 0.1x | 0.0056 | PASS |
+
+### Isolated large-size spot checks
+
+From dedicated single-case runs:
+
+- `32^3x32`: `cpu_ms=8779.4`, `gpu_ms=4182.0`, `max_diff=5.3694`
+- `32^3x64`: `cpu_ms=14885.2`, `gpu_ms=237346.9`, `max_diff=0.0056`
+
+### Current status vs requested success criteria
+
+- ✅ Correctness improved substantially for `32`-channel cases up to `24^3x32`.
+- ✅ `32^3x64` correctness is within tolerance (`max_diff < 10.0`).
+- ⚠️ `32^3x32` remains slightly above strict threshold (`5.3694` vs `< 5.0`).
+- ⚠️ Performance targets at `32^3x32` and especially `32^3x64` are not yet met in the full sweep.
+
+Interpretation: the major high-channel correctness regression is largely resolved, while large-volume runtime remains the primary outstanding bottleneck for this full MPPCA path.
