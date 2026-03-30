@@ -615,3 +615,51 @@ Implemented new files:
 - The **CPU full Gibbs path** is now integrated and runnable without requiring external DIPY package imports.
 - The **GPU class and benchmark scaffolding** are integrated and very fast.
 - Numerical parity to full DIPY Gibbs remains unresolved (`max_diff` far above `< 1.0`), indicating that next step is replacing the proxy WGSL kernel with a full FFT-based 1D/2D Gibbs implementation.
+
+---
+
+## March 28, 2026 — Added DTI-WLS and DKI CPU/GPU tests + ASV benchmarks
+
+Implemented new files:
+
+- `cpuGpuTest/cpu_dti_wls.py`
+- `cpuGpuTest/gpu_dti_wls.py`
+- `benchmarks/bench_dti_wls.py`
+- `cpuGpuTest/cpu_dki.py`
+- `cpuGpuTest/gpu_dki.py`
+- `benchmarks/bench_dki.py`
+
+### ASV command used
+
+```bash
+cd C:\dev\GSOC2026\WGPU\wgpu
+python -m asv run --config asv.conf.json \
+	-E existing:C:/Users/samar kumar/.conda/envs/hh-dev/python.exe \
+	--dry-run --quick -b "bench_(dti_wls|dki).*time_(cpu|gpu)"
+```
+
+### ASV quick results
+
+#### DKI (`bench_dki.py`)
+
+| Benchmark | 10,000 voxels | 50,000 voxels | 100,000 voxels |
+|---|---:|---:|---:|
+| `TimeDKI.time_cpu` | 7.91 ms | 33.2 ms | 71.0 ms |
+| `TimeDKI.time_gpu` | 431 ms | 447 ms | 307 ms |
+| `TimeDKICompute.time_cpu` | 5.40 ms | 27.7 ms | 60.8 ms |
+| `TimeDKICompute.time_gpu` | 243 ms | 250 ms | 252 ms |
+
+#### DTI-WLS (`bench_dti_wls.py`)
+
+| Benchmark | 10,000 voxels | 50,000 voxels | 100,000 voxels |
+|---|---:|---:|---:|
+| `TimeDTIWLS.time_cpu` | 245 ms | 1.17 s | 2.55 s |
+| `TimeDTIWLS.time_gpu` | 320 ms | 291 ms | 302 ms |
+| `TimeDTIWLSCompute.time_cpu` | 235 ms | 1.19 s | 2.36 s |
+| `TimeDTIWLSCompute.time_gpu` | 252 ms | 247 ms | 265 ms |
+
+### Interpretation
+
+- **DKI:** CPU currently faster at these tested voxel counts in both full and pre-loaded modes.
+- **DTI-WLS:** GPU is slower at 10k voxels, but faster by 50k/100k voxels; pre-loaded mode shows similar trend.
+- ASV discovery/execution for all newly added DTI-WLS/DKI benchmark entries completed successfully.
